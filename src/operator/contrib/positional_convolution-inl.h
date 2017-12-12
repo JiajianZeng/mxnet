@@ -41,11 +41,32 @@
 #include <string>
 #include <utility>
 #include "../operator_common.h"
+#include "../channel_op_common.h"
 #include "../nn/im2col.h"
 #include "../linalg.h"
 
 namespace mxnet{
 namespace op {
+
+/* for debug */
+template<typename xpu, typename DType>
+static void output_tensor(const Tensor<xpu, 2, DType> &tensor) {
+  DType* dptr = tensor.dptr_;
+  std::cout << "[";
+  for (index_t i = 0; i < tensor.shape_[0]; ++i) {
+    for (index_t j = 0; j < tensor.shape_[1]; ++j) {
+      std::cout << *dptr;
+      if (j != tensor.shape_[1] - 1){
+        std::cout << ", ";
+      }
+      dptr++;
+    }
+    if (i == tensor.shape_[0] - 1) {
+      std::cout << "]";
+    }
+    std::cout << std::endl << " ";
+  }
+}
 
 namespace conv{
   enum PositionalConvolutionOpInputs {kData, kScale, kWeight, kBias};
@@ -108,7 +129,92 @@ class PositionalConvolutionOp : public Operator {
     const std::vector<OpReqType> &req,
     const std::vector<TBlob> &out_data,
     const std::vector<TBlob> &aux_args) {
+    using namespace mshadow;
+    using namespace mshadow::expr;
+    CHECK_EQ(req[conv::kOut], kWriteTo);
+    size_t expected = param_.no_bias ? 3 : 4;
+    CHECK_EQ(in_data.size(), expected);
+    CHECK_EQ(out_data.size(), 1U);
+    LayerSetUp(in_data[conv::kData].shape_,
+               in_data[conv::kScale].shape_,
+               out_data[conv::kOut].shape_);
+    Stream<xpu>* s = ctx.get_stream<xpu>();
+    // allocate workspace for col_buffer as well as scale buffer,
+    // the total size is D * K * K * out_height * out_width +
+    // D / group * K * K * out_height * out_width
+    Tensor<xpu, 1, DType> workspace = ctx.requested[conv::kTempSpace]
+      .get_space_typed<xpu, 1, DType>(
+      Shape1(col_buffer_size_ + scale_buffer_size_), s);
+    // calculate the shape of the col_buffer
+    // which has 3 dimensions for 2D positional convolution, i.e.
+    // (D * K * K, out_height, out_width)
+    TShape col_buffer_shape(num_spatial_axes_ + 1);
+    col_buffer_shape[0] = conv_in_channels_ * param_.kernel.Size();
+    for (index_t i = 1; i < col_buffer_shape.ndim(); ++i) {
+      col_buffer_shape[i] = out_data[conv::kOut].shape_[i + 1];
+    }
+    // create a column buffer using workspace and col_buffer_space
+    TBlob col_buffer(workspace.dptr_, col_buffer_shape, xpu::kDevMask, DataType<DType>::kFlag);
 
+    // initialize weight and col_buffer 3D tensors for using gemm
+    index_t M = conv_out_channels_ / group_;
+    index_t N = conv_out_spatial_dim_;
+    index_t K = kernel_dim_;
+    index_t L = conv_in_channels_ / group_;
+    index_t S = K / L;
+    Tensor<xpu, 3, DType> weight_3d = in_data[conv::kWeight].get_with_shape<xpu, 3, DType>(
+      Shape3(group_, M, K), s);
+    Tensor<xpu, 3, DType> col_buffer_3d = col_buffer.get_with_shape<xpu, 3, DType>(
+      Shape3(group_, K, N), s);
+    Tensor<xpu, 4, DType> output_4d = out_data[conv::kOut].get_with_shape<xpu, 4, DType>(
+      Shape4(num_, group_, M, N), s);
+    // initializations for using Split, broadcast_keepdim,
+    // as well as Concatenate
+    Tensor<xpu, 4, DType> scale_4d = in_data[conv::kScale].get_with_shape<xpu, 4, DType>(
+      Shape4(num_, group_, L, N));
+    DType* scale_buffer_dptr = workspace.dptr_ + col_buffer_size_;
+    std::vector<Tensor<xpu, 2, DType> > scale_2d_split(L);
+    for (index_t i = 0;i < L; ++i) {
+      scale_2d_split.at(i) = Tensor<xpu, 2, DType>(scale_buffer_dptr + i * S * N,
+        Shape2(1, N), s);
+    }
+    std::vector<Tensor<xpu, 2, DType> > scale_2d_concat(L);
+    for (index_t i = 0; i < L; ++i) {
+      scale_2d_concat.at(i) = Tensor<xpu, 2, DType>(scale_buffer_dptr + i * S * N,
+        Shape2(S, N), s);
+    }
+    std::vector<OpReqType> req_split(L, kWriteTo);
+    Tensor<xpu, 2, DType> scale_2d_expanded = Tensor<xpu, 2, DType>(scale_buffer_dptr,
+      Shape2(K, N), s);
+
+    for (index_t n = 0; n < num_; ++n) {
+      // transform image to col_buffer in order to use gemm
+      im2col(s, in_data[conv::kData].dptr<DType>()+n*input_dim_, in_data[conv::kData].shape_,
+               col_buffer.shape_, param_.kernel, param_.pad, param_.stride, param_.dilate,
+               col_buffer.dptr<DType>());
+      Tensor<xpu, 3, DType> output_3d = output_4d[n];
+      Tensor<xpu, 3, DType> scale_3d = scale_4d[n];
+
+      for (index_t g = 0;g < group_; ++g) {
+        Split(scale_3d[g], &scale_2d_split, 0, req_split);
+        for (index_t i = 0; i < scale_2d_split.size(); ++i) {
+          scale_2d_concat.at(i) = broadcast_keepdim(scale_2d_split.at(i), 0, S);
+        }
+        Concatenate(scale_2d_concat, &scale_2d_expanded, 0, kWriteTo);
+        scale_2d_expanded = col_buffer_3d[g] *  scale_2d_expanded;
+        // Legacy approach shown here for comparison:
+        //   Assign(output_3d[g], req[conv::kOut], dot(weight_3d[g], col_buffer_3d[g]));
+        linalg_gemm(weight_3d[g], scale_2d_expanded, output_3d[g], false, false, s,
+          req[conv::kOut]);
+      }
+    }
+    if (bias_term_) {
+      Tensor<xpu, 1, DType> bias = in_data[conv::kBias].get<xpu, 1, DType>(s);
+      Tensor<xpu, 3, DType> output_3d = out_data[conv::kOut].get_with_shape<xpu, 3, DType>(
+        Shape3(num_, conv_out_channels_, conv_out_spatial_dim_), s);
+      // has bias term, broadcast it to the same shape of output_3d in channel dim
+      output_3d += mshadow::expr::broadcast<1>(bias, output_3d.shape_);
+    }
   }
 
   virtual void Backward(const OpContext &ctx,
@@ -118,7 +224,7 @@ class PositionalConvolutionOp : public Operator {
     const std::vector<OpReqType>& req,
     const std::vector<TBlob>& in_grad,
     const std::vector<TBlob>& aux_args) {
-
+    
   }
 
  private:
@@ -148,6 +254,12 @@ class PositionalConvolutionOp : public Operator {
     output_offset_ = conv_out_channels_ * conv_out_spatial_dim_ / group_;
     // size of the column buffer used for storing im2col-ed pixels
     col_buffer_size_ = kernel_dim_ * group_ * conv_out_spatial_dim_;
+    // size of the scale buffer used for storing scale_2d_split
+    // vector (scale_2d -> scale_2d_split), scale_2d_concat
+    // vector (scale_2d_split -> scale_2d_concat) and
+    // scale_2d_expanded (scale_2d_concat -> scale_2d_expanded)
+    scale_buffer_size_ = param_.kernel.Size() * conv_out_spatial_dim_ *
+      conv_in_channels_ / group_;
     // input/output image size (#channels * height * width)
     input_dim_ = ishape.ProdShape(1, ishape.ndim());
     input_scale_dim_ = scale_shape.ProdShape(1, scale_shape.ndim());
@@ -171,6 +283,7 @@ class PositionalConvolutionOp : public Operator {
   index_t col_offset_;
   index_t output_offset_;
   index_t col_buffer_size_;
+  index_t scale_buffer_size_;
   index_t input_dim_;
   index_t input_scale_dim_;
   index_t output_dim_;
