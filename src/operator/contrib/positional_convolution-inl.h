@@ -189,7 +189,7 @@ class PositionalConvolutionOp : public Operator {
 
     for (index_t n = 0; n < num_; ++n) {
       // transform image to col_buffer in order to use gemm
-      im2col(s, in_data[conv::kData].dptr<DType>()+n*input_dim_, in_data[conv::kData].shape_,
+      im2col(s, in_data[conv::kData].dptr<DType>() + n * input_dim_, in_data[conv::kData].shape_,
                col_buffer.shape_, param_.kernel, param_.pad, param_.stride, param_.dilate,
                col_buffer.dptr<DType>());
       Tensor<xpu, 3, DType> output_3d = output_4d[n];
@@ -203,7 +203,7 @@ class PositionalConvolutionOp : public Operator {
         Concatenate(scale_2d_concat, &scale_2d_expanded, 0, kWriteTo);
         scale_2d_expanded = col_buffer_3d[g] *  scale_2d_expanded;
         // Legacy approach shown here for comparison:
-        //   Assign(output_3d[g], req[conv::kOut], dot(weight_3d[g], col_buffer_3d[g]));
+        //   Assign(output_3d[g], req[conv::kOut], dot(weight_3d[g], scale_2d_expanded));
         linalg_gemm(weight_3d[g], scale_2d_expanded, output_3d[g], false, false, s,
           req[conv::kOut]);
       }
@@ -224,7 +224,141 @@ class PositionalConvolutionOp : public Operator {
     const std::vector<OpReqType>& req,
     const std::vector<TBlob>& in_grad,
     const std::vector<TBlob>& aux_args) {
-    
+    using namespace mshadow;
+    using namespace mshadow::expr;
+    CHECK_EQ(out_grad.size(), 1U);
+    size_t expected = param_.no_bias == 0 ? 4 : 3;
+    CHECK(in_data.size() == expected && in_grad.size() == expected);
+    CHECK_EQ(req.size(), expected);
+    CHECK_EQ(in_data[conv::kWeight].CheckContiguous(), true);
+    LayerSetUp(in_grad[conv::kData].shape_,
+               in_grad[conv::kScale].shape_,
+               out_grad[conv::kOut].shape_);
+    Stream<xpu> *s = ctx.get_stream<xpu>();
+    // allocate workspace for col_buffer, scale_*d*, and ones_2d
+    // the total size is D * K * K * out_height * out_width +
+    // D / group * K * K * out_height * out_width +
+    // K * K
+    Tensor<xpu, 1, DType> workspace = ctx.requested[conv::kTempSpace]
+      .get_space_typed<xpu, 1, DType>(
+      Shape1(col_buffer_size_ + scale_buffer_size_ + param_.kernel.Size()), s);
+    // calculate the shape of col_buffer
+    // which has 3 dimensions for 2D positional convolution, i.e.
+    // (D * K * K, out_height, out_width)
+    TShape col_buffer_shape(num_spatial_axes_ + 1);
+    col_buffer_shape[0] = conv_in_channels_ * param_.kernel.Size();
+    for (index_t i = 1; i < col_buffer_shape.ndim(); ++i) {
+      col_buffer_shape[i] = out_grad[conv::kData].shape_[i + 1];
+    }
+    // create a column buffer using workspace and col_buffer_shape
+    TBlob col_buffer(workspace.dptr_, col_buffer_shape, xpu::kDevMask, DataType<DType>::kFlag);
+
+    // For computing dLoss/d(in_data[kData])
+    index_t M = kernel_dim_;
+    index_t N = conv_out_spatial_dim_;
+    index_t K = conv_out_channels_ / group_;
+    index_t L = conv_in_channels_ / group_;
+    index_t S = M / L;
+    Tensor<xpu, 3, DType> weight_3d = in_data[conv::kWeight].get_with_shape<xpu, 3, DType>(
+      Shape3(group_, K, M), s);
+    Tensor<xpu, 4, DType> out_grad_4d = out_grad[conv::kOut].get_with_shape<xpu, 4, DType>(
+      Shape4(num_, group_, K, N), s);
+    Tensor<xpu, 3, DType> col_buffer_3d = col_buffer.get_with_shape<xpu, 3, DType>(
+      Shape3(group_, M, N), s);
+    // For computing dLoss/dWeight
+    Tensor<xpu, 3, DType> dweight_3d = in_grad[conv::kWeight].get_with_shape<xpu, 3, DType>(
+      Shape3(group_, K, M), s);
+    // For computing dLoss/d(in_data[kScale])
+    Tensor<xpu, 4, DType> dscale_4d = in_grad[conv::kScale].get_with_shape<xpu, 4, DType>(
+      Shape4(num_, group_, L, N), s);
+
+    // initializations for using Split, broadcast_keepdim,
+    // as well as Concatenate
+    Tensor<xpu, 4, DType> scale_4d = in_data[conv::kScale].get_with_shape<xpu, 4, DType>(
+      Shape4(num_, group_, L, N));
+    DType* scale_buffer_dptr = workspace.dptr_ + col_buffer_size_;
+    std::vector<Tensor<xpu, 2, DType> > scale_2d_split(L);
+    for (index_t i = 0;i < L; ++i) {
+      scale_2d_split.at(i) = Tensor<xpu, 2, DType>(scale_buffer_dptr + i * S * N,
+        Shape2(1, N), s);
+    }
+    std::vector<Tensor<xpu, 2, DType> > scale_2d_concat(L);
+    for (index_t i = 0; i < L; ++i) {
+      scale_2d_concat.at(i) = Tensor<xpu, 2, DType>(scale_buffer_dptr + i * S * N,
+        Shape2(S, N), s);
+    }
+    std::vector<OpReqType> req_split(L, kWriteTo);
+    Tensor<xpu, 2, DType> scale_2d_expanded = Tensor<xpu, 2, DType>(scale_buffer_dptr,
+      Shape2(M, N), s);
+
+    // For computing matrix sum over rows, there may be a builtin function
+    // however, I can not find it (if found, the solution can be replaced)
+    Tensor<xpu, 2, DType> ones_2d = Tensor<xpu, 2, DType>(
+      scale_buffer_dptr + scale_buffer_size_, Shape2(1, S), s);
+    DType* ones_dptr = ones_2d.dptr_;
+    for (index_t i = 0; i < S; ++i) {
+      *ones_dptr++ = 1;
+    }
+
+    for (index_t n = 0;n < num_; ++n) {
+      Tensor<xpu, 3, DType> out_grad_3d = out_grad_4d[n];
+      Tensor<xpu, 3, DType> scale_3d = scale_4d[n];
+      // gradient w.r.t input data
+      for (index_t g = 0;g < group_; ++g) {
+        Split(scale_3d[g], &scale_2d_split, 0, req_split);
+        for (index_t i = 0; i < scale_2d_split.size(); ++i) {
+          scale_2d_concat.at(i) = broadcast_keepdim(scale_2d_split.at(i), 0, S);
+        }
+        Concatenate(scale_2d_concat, &scale_2d_expanded, 0, kWriteTo);
+        // Legacy approach shown here for comparison:
+        //   col_buffer_3d[g] = dot(weight_3d[g].T(), out_grad_3d[g]);
+        linalg_gemm(weight_3d[g], out_grad_3d[g], col_buffer_3d[g], true, false, s);
+        col_buffer_3d[g] = col_buffer_3d[g] * scale_2d_expanded;
+      }
+      col2im(s, col_buffer.dptr<DType>(), in_grad[conv::kData].shape_, col_buffer.shape_,
+             param_.kernel, param_.pad, param_.stride, param_.dilate,
+             in_grad[conv::kData].dptr<DType>() + n * input_dim_, req[conv::kData]);
+
+      // gradient w.r.t. weight, dWeight should accumulate across the batch and group
+      im2col(s, in_data[conv::kData].dptr<DType>() + n * input_dim_, in_data[conv::kData].shape_,
+             col_buffer.shape_, param_.kernel, param_.pad, param_.stride, param_.dilate,
+             col_buffer.dptr<DType>());
+      for (index_t g = 0; g < group_; ++g) {
+        auto request = (n == 0) ? req[conv::kWeight] : kAddTo;
+        Split(scale_3d[g], &scale_2d_split, 0, req_split);
+        for (index_t i = 0; i < scale_2d_split.size(); ++i) {
+          scale_2d_concat.at(i) = broadcast_keepdim(scale_2d_split.at(i), 0, S);
+        }
+        Concatenate(scale_2d_concat, &scale_2d_expanded, 0, kWriteTo);
+        scale_2d_expanded = scale_2d_expanded * col_buffer_3d[g];
+        // Legacy approach shown here for comparison:
+        //   Assign(dweight_3d[g], request, dot(out_grad_3d[g], scale_2d_expanded.T()));
+        linalg_gemm(out_grad_3d[g], scale_2d_expanded, dweight_3d[g], false, true, s, request);
+      }
+
+      // gradient w.r.t scale
+      Tensor<xpu, 3, DType> dscale_3d = dscale_4d[n];
+      for (index_t g = 0;g < group_; ++g) {
+        Tensor<xpu, 2, DType> dscale_2d = dscale_3d[g];
+        // Legacy approach shown here for comparison:
+        //   scale_2d_expanded = dot(weight_3d[g].T(), out_grad_3d[g]);
+        linalg_gemm(weight_3d[g], out_grad_3d[g], scale_2d_expanded, true, false, s);
+        scale_2d_expanded = scale_2d_expanded * col_buffer_3d[g];
+        Split(scale_2d_expanded, &scale_2d_concat, 0, req_split);
+        for (index_t i = 0; i < scale_2d_concat.size(); ++i) {
+          linalg_gemm(ones_2d, scale_2d_concat.at(i), scale_2d_split.at(i), false, false, s);
+        }
+        Concatenate(scale_2d_split, &dscale_2d, 0, kWriteTo);
+      }
+    }
+
+    // gradient w.r.t bias
+    if (bias_term_) {
+      Tensor<xpu, 1, DType> dbias = in_grad[conv::kBias].get<xpu, 1, DType>(s);
+      Tensor<xpu, 3, DType> dout = out_grad[conv::kOut].get_with_shape<xpu, 3, DType>(
+        Shape3(num_, conv_out_channels_, conv_out_spatial_dim_), s);
+      ASSIGN_DISPATCH(dbias, req[conv::kBias], sumall_except_dim<1>(dout));
+    }
   }
 
  private:
