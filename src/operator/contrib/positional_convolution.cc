@@ -20,7 +20,7 @@
  /*!
  * Copyright (c) 2017 By Contributors
  * Licensed under The Apache-2.0 License [see LICENSE for details]
- * \file positional_convolution.cu
+ * \file positional_convolution.cc
  * \brief
  * \author Jiajian Zeng
  */
@@ -62,7 +62,7 @@ The positional convolution operation is described in https://
 For 2-D positional convolution, the shapes are
 
 - **data**: *(batch_size, channel, height, width)*
-- **scale**: *(batch_size, channel, height, width)*
+- **scale**: *(batch_size, channel, out_height, out_width)*
 - **weight**: *(num_filter, channel, kernel[0], kernel[1])*
 - **bias**: *(num_filter,)*
 - **out**: *(batch_size, num_filter, out_height, out_width)*.
@@ -85,7 +85,7 @@ If ``num_group`` is larger than 1, denoted by *g*, then split the input ``data``
 evenly into *g* parts along the channel axis, and also evenly split ``weight``
 along the first dimension (the second dimension of the input ``data`` will change
 accordingly). Next compute the convolution on the *i*-th part of
-the data with the *i*-th weight part. The output is obtained by concating all
+the data with the *i*-th weight part. The output is obtained by concatenating all
 the *g* results.
 
 

@@ -23,6 +23,7 @@ from mxnet.test_utils import *
 import unittest
 import itertools
 
+
 def test_positional_convolution_forward(ctx):
     """
     Test positional convolution forward.
@@ -142,7 +143,11 @@ def test_positional_convolution_forward(ctx):
     out_o = be.outputs[0].asnumpy()
     print(out_o)
 
+
 def test_positional_convolution_backward():
+    """
+    Test positional convolution backward.
+    """
     for num_batch in [1, 2, 4]:
         for num_channel_data in [4, 8, 12]:
             for input_height, input_width in itertools.product([5, 6, 9], [5, 6, 9]):

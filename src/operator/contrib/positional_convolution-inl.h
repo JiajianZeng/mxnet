@@ -21,6 +21,7 @@
  * Copyright (c) 2017 by Contributors
  * \file positional_convolution-inl.h
  * \brief
+ * \ref: https://
  * \ref: https://github.com/Yangqing/caffe/wiki/Convolution-in-Caffe:-a-memo
  * \author Jiajian Zeng
  */
@@ -48,26 +49,6 @@
 namespace mxnet{
 namespace op {
 
-/* for debug */
-template<typename xpu, typename DType>
-static void output_tensor(const Tensor<xpu, 2, DType> &tensor) {
-  DType* dptr = tensor.dptr_;
-  std::cout << "[";
-  for (index_t i = 0; i < tensor.shape_[0]; ++i) {
-    for (index_t j = 0; j < tensor.shape_[1]; ++j) {
-      std::cout << *dptr;
-      if (j != tensor.shape_[1] - 1){
-        std::cout << ", ";
-      }
-      dptr++;
-    }
-    if (i == tensor.shape_[0] - 1) {
-      std::cout << "]";
-    }
-    std::cout << std::endl << " ";
-  }
-}
-
 namespace conv{
   enum PositionalConvolutionOpInputs {kData, kScale, kWeight, kBias};
   enum PositionalConvolutionOpOutputs {kOut};
@@ -93,7 +74,7 @@ struct PositionalConvolutionParam : public dmlc::Parameter<PositionalConvolution
     DMLC_DECLARE_FIELD(pad).set_default(TShape())
       .describe("Zero pad for convolution: (h, w) or (d, h, w). Defaults to no padding.");
     DMLC_DECLARE_FIELD(num_filter).set_range(1, 100000)
-      .describe("Convolution filter(channel) number");
+      .describe("Convolution filter (channel) number");
     DMLC_DECLARE_FIELD(num_group).set_default(1)
       .describe("Number of group partitions.");
     DMLC_DECLARE_FIELD(workspace).set_default(1024).set_range(0, 8192)
@@ -119,16 +100,16 @@ class PositionalConvolutionOp : public Operator {
     // convert MBytes first to Bytes and then to elements.
     param_.workspace = (param_.workspace << 20) / sizeof(DType);
     CHECK(param_.layout.value() == mshadow::kNCW ||
-      param_.layout.value() == mshadow::kNCHW ||
-      param_.layout.value() == mshadow::kNCDHW)
-      << "Only support NCW, NCHW and NCDHW layout";
+         param_.layout.value() == mshadow::kNCHW ||
+         param_.layout.value() == mshadow::kNCDHW)
+       << "Only support NCW, NCHW and NCDHW layout";
   }
 
   virtual void Forward(const OpContext &ctx,
-    const std::vector<TBlob> &in_data,
-    const std::vector<OpReqType> &req,
-    const std::vector<TBlob> &out_data,
-    const std::vector<TBlob> &aux_args) {
+                       const std::vector<TBlob> &in_data,
+                       const std::vector<OpReqType> &req,
+                       const std::vector<TBlob> &out_data,
+                       const std::vector<TBlob> &aux_args) {
     using namespace mshadow;
     using namespace mshadow::expr;
     CHECK_EQ(req[conv::kOut], kWriteTo);
@@ -139,24 +120,27 @@ class PositionalConvolutionOp : public Operator {
                in_data[conv::kScale].shape_,
                out_data[conv::kOut].shape_);
     Stream<xpu>* s = ctx.get_stream<xpu>();
-    // allocate workspace for col_buffer as well as scale buffer,
-    // the total size is D * K * K * out_height * out_width +
-    // D / group * K * K * out_height * out_width
+
+    // allocate workspace for col_buffer as well as scale_2d_split
+    // (and/or scale_2d_concat, scale_2d_expanded),
+    // the total size is C * K * K * out_height * out_width +
+    // C / group * K * K * out_height * out_width
     Tensor<xpu, 1, DType> workspace = ctx.requested[conv::kTempSpace]
-      .get_space_typed<xpu, 1, DType>(
-      Shape1(col_buffer_size_ + scale_buffer_size_), s);
+      .get_space_typed<xpu, 1, DType>(Shape1(
+      col_buffer_size_ + scale_buffer_size_), s);
     // calculate the shape of the col_buffer
     // which has 3 dimensions for 2D positional convolution, i.e.
-    // (D * K * K, out_height, out_width)
+    // (C * K * K, out_height, out_width)
     TShape col_buffer_shape(num_spatial_axes_ + 1);
     col_buffer_shape[0] = conv_in_channels_ * param_.kernel.Size();
     for (index_t i = 1; i < col_buffer_shape.ndim(); ++i) {
       col_buffer_shape[i] = out_data[conv::kOut].shape_[i + 1];
     }
-    // create a column buffer using workspace and col_buffer_space
+    // create a column buffer using workspace and col_buffer_shape
     TBlob col_buffer(workspace.dptr_, col_buffer_shape, xpu::kDevMask, DataType<DType>::kFlag);
 
-    // initialize weight and col_buffer 3D tensors for using gemm
+    // initialize weight, col_buffer 3D tensors and
+    // output 4D tensors for using gemm
     index_t M = conv_out_channels_ / group_;
     index_t N = conv_out_spatial_dim_;
     index_t K = kernel_dim_;
@@ -168,13 +152,13 @@ class PositionalConvolutionOp : public Operator {
       Shape3(group_, K, N), s);
     Tensor<xpu, 4, DType> output_4d = out_data[conv::kOut].get_with_shape<xpu, 4, DType>(
       Shape4(num_, group_, M, N), s);
-    // initializations for using Split, broadcast_keepdim,
-    // as well as Concatenate
+    // initializations for using Split(...), broadcast_keepdim(...),
+    // as well as Concatenate(...)
     Tensor<xpu, 4, DType> scale_4d = in_data[conv::kScale].get_with_shape<xpu, 4, DType>(
       Shape4(num_, group_, L, N));
     DType* scale_buffer_dptr = workspace.dptr_ + col_buffer_size_;
     std::vector<Tensor<xpu, 2, DType> > scale_2d_split(L);
-    for (index_t i = 0;i < L; ++i) {
+    for (index_t i = 0; i < L; ++i) {
       scale_2d_split.at(i) = Tensor<xpu, 2, DType>(scale_buffer_dptr + i * S * N,
         Shape2(1, N), s);
     }
@@ -195,13 +179,13 @@ class PositionalConvolutionOp : public Operator {
       Tensor<xpu, 3, DType> output_3d = output_4d[n];
       Tensor<xpu, 3, DType> scale_3d = scale_4d[n];
 
-      for (index_t g = 0;g < group_; ++g) {
+      for (index_t g = 0; g < group_; ++g) {
         Split(scale_3d[g], &scale_2d_split, 0, req_split);
         for (index_t i = 0; i < scale_2d_split.size(); ++i) {
           scale_2d_concat.at(i) = broadcast_keepdim(scale_2d_split.at(i), 0, S);
         }
         Concatenate(scale_2d_concat, &scale_2d_expanded, 0, kWriteTo);
-        scale_2d_expanded = col_buffer_3d[g] *  scale_2d_expanded;
+        scale_2d_expanded = col_buffer_3d[g] * scale_2d_expanded;
         // Legacy approach shown here for comparison:
         //   Assign(output_3d[g], req[conv::kOut], dot(weight_3d[g], scale_2d_expanded));
         linalg_gemm(weight_3d[g], scale_2d_expanded, output_3d[g], false, false, s,
@@ -218,12 +202,12 @@ class PositionalConvolutionOp : public Operator {
   }
 
   virtual void Backward(const OpContext &ctx,
-    const std::vector<TBlob>& out_grad,
-    const std::vector<TBlob>& in_data,
-    const std::vector<TBlob>& out_data,
-    const std::vector<OpReqType>& req,
-    const std::vector<TBlob>& in_grad,
-    const std::vector<TBlob>& aux_args) {
+                        const std::vector<TBlob>& out_grad,
+                        const std::vector<TBlob>& in_data,
+                        const std::vector<TBlob>& out_data,
+                        const std::vector<OpReqType>& req,
+                        const std::vector<TBlob>& in_grad,
+                        const std::vector<TBlob>& aux_args) {
     using namespace mshadow;
     using namespace mshadow::expr;
     CHECK_EQ(out_grad.size(), 1U);
@@ -235,16 +219,17 @@ class PositionalConvolutionOp : public Operator {
                in_grad[conv::kScale].shape_,
                out_grad[conv::kOut].shape_);
     Stream<xpu> *s = ctx.get_stream<xpu>();
+
     // allocate workspace for col_buffer, scale_*d*, and ones_2d
-    // the total size is D * K * K * out_height * out_width +
-    // D / group * K * K * out_height * out_width +
+    // the total size is C * K * K * out_height * out_width +
+    // C / group * K * K * out_height * out_width +
     // K * K
     Tensor<xpu, 1, DType> workspace = ctx.requested[conv::kTempSpace]
-      .get_space_typed<xpu, 1, DType>(
-      Shape1(col_buffer_size_ + scale_buffer_size_ + param_.kernel.Size()), s);
+      .get_space_typed<xpu, 1, DType>(Shape1(
+      col_buffer_size_ + scale_buffer_size_ + param_.kernel.Size()), s);
     // calculate the shape of col_buffer
     // which has 3 dimensions for 2D positional convolution, i.e.
-    // (D * K * K, out_height, out_width)
+    // (C * K * K, out_height, out_width)
     TShape col_buffer_shape(num_spatial_axes_ + 1);
     col_buffer_shape[0] = conv_in_channels_ * param_.kernel.Size();
     for (index_t i = 1; i < col_buffer_shape.ndim(); ++i) {
@@ -272,13 +257,13 @@ class PositionalConvolutionOp : public Operator {
     Tensor<xpu, 4, DType> dscale_4d = in_grad[conv::kScale].get_with_shape<xpu, 4, DType>(
       Shape4(num_, group_, L, N), s);
 
-    // initializations for using Split, broadcast_keepdim,
-    // as well as Concatenate
+    // initializations for using Split(...), broadcast_keepdim(...),
+    // as well as Concatenate(...)
     Tensor<xpu, 4, DType> scale_4d = in_data[conv::kScale].get_with_shape<xpu, 4, DType>(
       Shape4(num_, group_, L, N));
     DType* scale_buffer_dptr = workspace.dptr_ + col_buffer_size_;
     std::vector<Tensor<xpu, 2, DType> > scale_2d_split(L);
-    for (index_t i = 0;i < L; ++i) {
+    for (index_t i = 0; i < L; ++i) {
       scale_2d_split.at(i) = Tensor<xpu, 2, DType>(scale_buffer_dptr + i * S * N,
         Shape2(1, N), s);
     }
@@ -300,11 +285,11 @@ class PositionalConvolutionOp : public Operator {
       *ones_dptr++ = 1;
     }
 
-    for (index_t n = 0;n < num_; ++n) {
+    for (index_t n = 0; n < num_; ++n) {
       Tensor<xpu, 3, DType> out_grad_3d = out_grad_4d[n];
       Tensor<xpu, 3, DType> scale_3d = scale_4d[n];
       // gradient w.r.t input data
-      for (index_t g = 0;g < group_; ++g) {
+      for (index_t g = 0; g < group_; ++g) {
         Split(scale_3d[g], &scale_2d_split, 0, req_split);
         for (index_t i = 0; i < scale_2d_split.size(); ++i) {
           scale_2d_concat.at(i) = broadcast_keepdim(scale_2d_split.at(i), 0, S);
@@ -338,7 +323,7 @@ class PositionalConvolutionOp : public Operator {
 
       // gradient w.r.t scale
       Tensor<xpu, 3, DType> dscale_3d = dscale_4d[n];
-      for (index_t g = 0;g < group_; ++g) {
+      for (index_t g = 0; g < group_; ++g) {
         Tensor<xpu, 2, DType> dscale_2d = dscale_3d[g];
         // Legacy approach shown here for comparison:
         //   scale_2d_expanded = dot(weight_3d[g].T(), out_grad_3d[g]);
@@ -346,6 +331,7 @@ class PositionalConvolutionOp : public Operator {
         scale_2d_expanded = scale_2d_expanded * col_buffer_3d[g];
         Split(scale_2d_expanded, &scale_2d_concat, 0, req_split);
         for (index_t i = 0; i < scale_2d_concat.size(); ++i) {
+          // The matrix's summing over rows solution here may be replaced by a builtin function
           linalg_gemm(ones_2d, scale_2d_concat.at(i), scale_2d_split.at(i), false, false, s);
         }
         Concatenate(scale_2d_split, &dscale_2d, 0, kWriteTo);
@@ -429,9 +415,9 @@ class PositionalConvolutionOp : public Operator {
 
 template<typename xpu>
 Operator* CreateOp(PositionalConvolutionParam param, int dtype,
-  std::vector<TShape> *in_shape,
-  std::vector<TShape> *out_shape,
-  Context ctx);
+                   std::vector<TShape> *in_shape,
+                   std::vector<TShape> *out_shape,
+                   Context ctx);
 
 #if DMLC_USE_CXX11
 class PositionalConvolutionProp : public OperatorProperty {
@@ -462,8 +448,8 @@ class PositionalConvolutionProp : public OperatorProperty {
   }
 
   bool InferShape(std::vector<TShape> *in_shape,
-    std::vector<TShape> *out_shape,
-    std::vector<TShape> *aux_shape) const override {
+                  std::vector<TShape> *out_shape,
+                  std::vector<TShape> *aux_shape) const override {
     using namespace mshadow;
     if (!param_.no_bias) {
       CHECK_EQ(in_shape->size(), 4U) << "Input:[data, scale, weight, bias]";
@@ -474,6 +460,7 @@ class PositionalConvolutionProp : public OperatorProperty {
     const TShape &dshp = (*in_shape)[conv::kData];
     const TShape &sshp = (*in_shape)[conv::kScale];
     if (dshp.ndim() == 0) return false;
+
     if (param_.kernel.ndim() == 2) {
       // 2d conv
       CHECK_EQ(dshp.ndim(), 4U) \
@@ -529,7 +516,7 @@ class PositionalConvolutionProp : public OperatorProperty {
         dshape[3] = oshape[3] + param_.dilate[1] * (ksize_x - 1) - 2 * param_.pad[1];
       }
       SHAPE_ASSIGN_CHECK(*in_shape, conv::kData,
-        ConvertLayout(dshape, kNCHW, param_.layout.value()));
+                         ConvertLayout(dshape, kNCHW, param_.layout.value()));
       // Check whether the kernel sizes are valid
       if (dshape[2] != 0) {
         CHECK_LE(ksize_y, dshape[2] + 2 * param_.pad[0]) << "kernel size exceed input";
@@ -545,8 +532,8 @@ class PositionalConvolutionProp : public OperatorProperty {
   }
 
   bool InferType(std::vector<int> *in_type,
-    std::vector<int> *out_type,
-    std::vector<int> *aux_type) const override {
+                 std::vector<int> *out_type,
+                 std::vector<int> *aux_type) const override {
     CHECK_GE(in_type->size(), 1U);
     int dtype = (*in_type)[0];
     CHECK_NE(dtype, -1) << "First input must have specified type";
@@ -596,7 +583,7 @@ class PositionalConvolutionProp : public OperatorProperty {
   }
 
   Operator* CreateOperatorEx(Context ctx, std::vector<TShape> *in_shape,
-    std::vector<int> *in_type) const override;
+                             std::vector<int> *in_type) const override;
 
  private:
   PositionalConvolutionParam param_;

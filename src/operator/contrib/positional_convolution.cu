@@ -40,7 +40,7 @@ namespace op {
     MSHADOW_REAL_TYPE_SWITCH(dtype, DType, {
       op = new PositionalConvolutionOp<gpu, DType>(param);
     })
-      return op;
+    return op;
   }
 
 }  // namespace op
