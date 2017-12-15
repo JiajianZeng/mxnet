@@ -31,9 +31,12 @@
 #include <cassert>
 #include "./positional_pooling-inl.h"
 
+using mxnet::TShape;
+
 namespace mshadow {
 template<typename DType>
-inline void PositionalPoolForward(const Tensor<cpu, 4, DType> &out,
+inline void PositionalPoolForward(Stream<cpu>*s,
+                                  const Tensor<cpu, 4, DType> &out,
                                   const Tensor<cpu, 4, DType> &data,
                                   const Tensor<cpu, 4, DType> &map,
                                   const TShape& kernel,
@@ -45,7 +48,8 @@ inline void PositionalPoolForward(const Tensor<cpu, 4, DType> &out,
 }
 
 template<typename DType>
-inline void PositionalPoolBackward(const Tensor<cpu, 4, DType>& in_grad,
+inline void PositionalPoolBackward(Stream<cpu>* s,
+                                   const Tensor<cpu, 4, DType>& in_grad,
                                    const Tensor<cpu, 4, DType>& out_grad,
                                    const Tensor<cpu, 4, DType>& map_grad,
                                    const Tensor<cpu, 4, DType>& in_data,
@@ -82,7 +86,7 @@ Operator *PositionalPoolingProp::CreateOperatorEx(Context ctx, std::vector<TShap
 
 DMLC_REGISTER_PARAMETER(PositionalPoolingParam);
 
-MXNET_REGISTER_OP_PROPERTY(PositionalPooling, PositionalPoolingProp)
+MXNET_REGISTER_OP_PROPERTY(_contrib_PositionalPooling, PositionalPoolingProp)
 .describe(R"code(Performs positional pooling on the input.
 
 The shapes for 2-D positional pooling are
@@ -112,7 +116,7 @@ Two pooling options are supported by ``pool_type``:
 )code" ADD_FILELINE)
 .add_argument("data", "NDArray-or-Symbol", "Input data to the pooling operator.")
 .add_argument("map", "NDArray-or-Symbol", "Input map to the pooling operator.")
-.add_arguments(PoolingParam::__FIELDS__());
+.add_arguments(PositionalPoolingParam::__FIELDS__());
 
 }  // namespace op
 }  // namespace mxnet

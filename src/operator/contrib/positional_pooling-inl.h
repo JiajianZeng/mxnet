@@ -46,7 +46,7 @@ namespace ppool {
 enum PositionalPoolingOpInputs {kData, kMap};
 enum PositionalPoolingOpOutputs {kOut};
 enum PositionalPoolingOpType {kNormal, kProd};
-enum PositionalPoolingOpPadConventionType {kValid, KFull};
+enum PositionalPoolingOpPadConventionType {kValid, kFull};
 }  // ppool
 
 struct PositionalPoolingParam : public dmlc::Parameter<PositionalPoolingParam> {
@@ -91,7 +91,19 @@ class PositionalPoolingOp : public Operator {
                        const std::vector<OpReqType>& req,
                        const std::vector<TBlob>& out_data,
                        const std::vector<TBlob>& aux_args) {
+    using namespace mshadow;
+    CHECK_EQ(in_data.size(), 2U);
+    CHECK_EQ(out_data.size(), 1U);
+    CHECK_EQ(req.size(), 1U);
+    Stream<xpu>* s = ctx.get_stream<xpu>();
 
+    Tensor<xpu, 4, DType> data = in_data[ppool::kData].get<xpu, 4, DType>(s);
+    Tensor<xpu, 4, DType> map = in_data[ppool::kMap].get<xpu, 4, DType>(s);
+    Tensor<xpu, 4, DType> out = out_data[ppool::kOut].get<xpu, 4, DType>(s);
+    CHECK_EQ(data.CheckContiguous(), true);
+    CHECK_EQ(map.CheckContiguous(), true);
+    CHECK_EQ(out.CheckContiguous(), true);
+    PositionalPoolForward(s, out, data, map, param_.kernel, param_.pad, param_.stride, param_.pool_type);
   }
 
   virtual void Backward(const OpContext& ctx,
@@ -101,7 +113,26 @@ class PositionalPoolingOp : public Operator {
                         const std::vector<OpReqType>& req,
                         const std::vector<TBlob>& in_grad,
                         const std::vector<TBlob>& aux_args) {
+    using namespace mshadow;
+    CHECK_EQ(out_grad.size(), 1U);
+    CHECK_EQ(in_data.size(), 2U);
+    CHECK_EQ(out_data.size(), 1U);
+    CHECK_EQ(req.size(), 2U);
+    CHECK_EQ(in_grad.size(), 2U);
+    Stream<xpu>*s  = ctx.get_stream<xpu>();
 
+    Tensor<xpu, 4, DType> in_data_grad = in_grad[ppool::kData].get<xpu, 4, DType>(s);
+    Tensor<xpu, 4, DType> out_data_grad = out_grad[ppool::kOut].get<xpu, 4, DType>(s);
+    Tensor<xpu, 4, DType> in_map_grad = in_grad[ppool::kMap].get<xpu, 4, DType>(s);
+    Tensor<xpu, 4, DType> data = in_data[ppool::kData].get<xpu, 4, DType>(s);
+    Tensor<xpu, 4, DType> map = in_data[ppool::kMap].get<xpu, 4, DType>(s);
+    CHECK_EQ(in_data_grad.CheckContiguous(), true);
+    CHECK_EQ(out_data_grad.CheckContiguous(), true);
+    CHECK_EQ(in_map_grad.CheckContiguous(), true);
+    CHECK_EQ(data.CheckContiguous(), true);
+    CHECK_EQ(map.CheckContiguous(), true);
+    PositionalPoolBackward(s, in_data_grad, out_data_grad, in_map_grad, data, map,
+                           param_.kernel, param_.pad, param_.stride, param_.pool_type);
   }
  private:
   PositionalPoolingParam param_;
@@ -143,7 +174,7 @@ class PositionalPoolingProp : public OperatorProperty {
                   std::vector<TShape> *aux_shape) const override {
     CHECK_EQ(in_shape->size(), 2U) << "Input: [data, map]";
     const TShape &dshape = in_shape->at(ppool::kData);
-    const TShape &mshape = in_shape->at(ppoll::kMap);
+    const TShape &mshape = in_shape->at(ppool::kMap);
 
     CHECK_EQ(dshape.ndim(), 4U) << "Pooling: Input data should be 4D in (batch, channel, y, x)";
     CHECK_GE(mshape.ndim(), 4U) << "Pooling: Input map should be 4D in (batch, channel, y, x)";
@@ -176,7 +207,7 @@ class PositionalPoolingProp : public OperatorProperty {
       out_shape->clear();
       out_shape->push_back(oshape);  // save output shape
     } else {
-      LOG(FATAL) << "not implemented."
+      LOG(FATAL) << "not implemented.";
       return false;
     }
     return true;
@@ -212,11 +243,10 @@ class PositionalPoolingProp : public OperatorProperty {
     const std::vector<int> &out_data) const override {
     // for normal positional pooling
     if (param_.pool_type == ppool::kNormal){
-      return {out_grad[ppool::kOut], in_data[ppool::kData],
-              out_data[ppool::KOut]};
+      return {out_grad[ppool::kOut], in_data[ppool::kMap]};
     } else {  // for prod positional pooling
       return {out_grad[ppool::kOut], in_data[ppool::kData],
-              in_data[ppool::kMap], out_data[ppool::KOut]};
+              in_data[ppool::kMap]};
     }
   }
 
@@ -230,7 +260,6 @@ class PositionalPoolingProp : public OperatorProperty {
 
    private:
     PositionalPoolingParam param_;
-  }
 };   // class PositionalPoolingProp
 #endif  // DMLC_USE_CXX11
 }  // namespace op
