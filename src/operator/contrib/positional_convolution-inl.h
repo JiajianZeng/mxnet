@@ -280,10 +280,7 @@ class PositionalConvolutionOp : public Operator {
     // however, I can not find it (if found, the solution can be replaced)
     Tensor<xpu, 2, DType> ones_2d = Tensor<xpu, 2, DType>(
       scale_buffer_dptr + scale_buffer_size_, Shape2(1, S), s);
-    DType* ones_dptr = ones_2d.dptr_;
-    for (index_t i = 0; i < S; ++i) {
-      *ones_dptr++ = 1;
-    }
+    ones_2d = DType(1);
 
     for (index_t n = 0; n < num_; ++n) {
       Tensor<xpu, 3, DType> out_grad_3d = out_grad_4d[n];
