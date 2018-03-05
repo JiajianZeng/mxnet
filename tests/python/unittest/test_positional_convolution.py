@@ -153,7 +153,7 @@ def test_positional_convolution_backward():
             for input_height, input_width in itertools.product([5, 6, 9], [5, 6, 9]):
                 for dilate in [(1, 1), (2, 2)]:
                     for num_group in [1, 2, 4]:
-                        for grad_nodes in [['im_data'], ['scale_data'], ['weight'], ['bias']]:
+                            grad_nodes = ['im_data', 'scale_data', 'weight', 'bias']
                             output_height = input_height
                             output_width = input_width
                             im_data = np.random.rand(num_batch, num_channel_data, input_height, input_width)
@@ -174,11 +174,12 @@ def test_positional_convolution_backward():
                                                                       num_filter=num_channel_data, pad=dilate,
                                                                       kernel=(3, 3), stride=(1, 1), dilate=dilate,
                                                                       num_group=num_group)
-                            rtol, atol = 1e-5, 1e-8
+                            rtol, atol = 1e-3, 1e-3
+                            # absolute(a - b) <= (atol + rtol * absolute(b))
                             # By now we only have gpu implementation
-                            if mx.Context.default_ctx.device_type == 'gpu':
-                                check_numeric_gradient(op, [im_data, scale_data, weight, bias], rtol=rtol, atol=atol,
-                                                       grad_nodes=grad_nodes, ctx=mx.gpu(0))
+                            # if mx.Context.default_ctx.device_type == 'gpu':
+                            check_numeric_gradient(op, [im_data, scale_data, weight, bias], rtol=rtol, atol=atol, numeric_eps=1e-5,
+                                                   grad_nodes=grad_nodes, ctx=mx.gpu(0))
 
 
 if __name__ == '__main__':
