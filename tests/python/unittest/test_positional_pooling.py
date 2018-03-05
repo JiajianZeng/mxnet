@@ -31,53 +31,53 @@ def test_positional_pooling_forward(ctx):
     # num_batch * channel * height * width input
     # i.e. (2, 2, 6, 6)
     in_data = \
-    mx.nd.array(
-    [
-    [[[1, 2, -1, 0, 1, 1],
-      [3, 6, -5, 4, 2, -2],
-      [9, 6, -1, 3, 1, 3],
-      [4, 2, 5, 7, 3, 1],
-      [0, 1, 1, 2, 2, 1],
-      [3, 1, 2, 4, 3, 3]],
+        mx.nd.array(
+            [
+                [[[1, 2, -1, 0, 1, 1],
+                  [3, 6, -5, 4, 2, -2],
+                  [9, 6, -1, 3, 1, 3],
+                  [4, 2, 5, 7, 3, 1],
+                  [0, 1, 1, 2, 2, 1],
+                  [3, 1, 2, 4, 3, 3]],
 
-     [[3, 1, 2, 4, 3, 3],
-      [0, 1, 1, 2, 2, 1],
-      [4, 2, 5, 7, 3, 1],
-      [9, 6, -1, 3, 1, 3],
-      [3, 6, -5, 4, 2, -2],
-      [1, 2, -1, 0, 1, 1]]],
-    [[[1, 2, 3, 4, 5, 6],
-      [6, 5, 4, 3, 2, 1],
-      [0, 0, 1, 1, 2, 2],
-      [3, 3, 0, -1, -1, -2],
-      [3, 1, 0, 3, 3, 2],
-      [5, 6, 7, -1, -2, 0]],
+                 [[3, 1, 2, 4, 3, 3],
+                  [0, 1, 1, 2, 2, 1],
+                  [4, 2, 5, 7, 3, 1],
+                  [9, 6, -1, 3, 1, 3],
+                  [3, 6, -5, 4, 2, -2],
+                  [1, 2, -1, 0, 1, 1]]],
+                [[[1, 2, 3, 4, 5, 6],
+                  [6, 5, 4, 3, 2, 1],
+                  [0, 0, 1, 1, 2, 2],
+                  [3, 3, 0, -1, -1, -2],
+                  [3, 1, 0, 3, 3, 2],
+                  [5, 6, 7, -1, -2, 0]],
 
-     [[5, 6, 7, -1, -2, 0],
-      [3, 1, 0, 3, 3, 2],
-      [3, 3, 0, -1, -1, -2],
-      [0, 0, 1, 1, 2, 2],
-      [6, 5, 4, 3, 2, 1],
-      [1, 2, 3, 4, 5, 6]]]
-    ], ctx=ctx)
+                 [[5, 6, 7, -1, -2, 0],
+                  [3, 1, 0, 3, 3, 2],
+                  [3, 3, 0, -1, -1, -2],
+                  [0, 0, 1, 1, 2, 2],
+                  [6, 5, 4, 3, 2, 1],
+                  [1, 2, 3, 4, 5, 6]]]
+            ], ctx=ctx)
 
     in_map = \
-    mx.nd.array(
-    [
-    [[[0.9, 0.8, 0.7, 0.5, 0.4, 0.3],
-      [0.7, 1.0, 0.9, 0.3, 0.2, 0.1],
-      [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
-      [0.6, 0.5, 0.4, 0.3, 0.2, 0.1],
-      [0.1, 0.2, 0.2, 0.3, 0.3, 0.4],
-      [0.4, 0.3, 0.3, 0.2, 0.2, 0.1]]],
+        mx.nd.array(
+            [
+                [[[0.9, 0.8, 0.7, 0.5, 0.4, 0.3],
+                  [0.7, 1.0, 0.9, 0.3, 0.2, 0.1],
+                  [0.1, 0.2, 0.3, 0.3, 0.5, 0.6],
+                  [0.6, 0.5, 0.4, 0.3, 0.2, 0.1],
+                  [0.1, 0.2, 0.2, 0.4, 0.3, 0.4],
+                  [0.4, 0.3, 0.3, 0.2, 0.2, 0.1]]],
 
-    [[[0.4, 0.3, 0.3, 0.2, 0.2, 0.1],
-      [0.1, 0.2, 0.2, 0.3, 0.3, 0.4],
-      [0.6, 0.5, 0.4, 0.3, 0.2, 0.1],
-      [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
-      [0.7, 1.0, 0.9, 0.3, 0.2, 0.1],
-      [0.9, 0.8, 0.7, 0.5, 0.4, 0.3]]]
-    ], ctx=ctx)
+                [[[0.4, 0.3, 0.3, 0.2, 0.2, 0.1],
+                  [0.1, 0.2, 0.2, 0.2, 0.3, 0.4],
+                  [0.6, 0.5, 0.4, 0.3, 0.2, 0.1],
+                  [0.1, 0.2, 0.3, 0.1, 0.5, 0.6],
+                  [0.7, 1.0, 0.9, 0.3, 0.2, 0.1],
+                  [0.9, 0.8, 0.7, 0.5, 0.4, 0.3]]]
+            ], ctx=ctx)
 
     in_data_var = mx.symbol.Variable(name="in_data")
     in_map_var = mx.symbol.Variable(name="in_map")
@@ -112,40 +112,74 @@ def test_positional_pooling_forward(ctx):
     print(out_o_prod)
 
 
-def test_positional_pooling_backward():
-    """
-    Test positional convolution backward.
-    """
-    for num_batch in [1, 2, 4]:
-        for num_channel_data in [4, 8, 12]:
-            for input_height, input_width in itertools.product([5, 6, 9], [5, 6, 9]):
-                for pool_type in ["normal", "prod"]:
-                    for pooling_convention in ["valid", "full"]:
-                        for kernel_w, kernel_h in itertools.product([2, 3], [2, 3]):
-                            for stride_w, stride_h in itertools.product([1, 2, 3], [1, 2, 3]):
-                                for pad_w, pad_h in itertools.product([0, 1], [0, 1]):
-                                    for grad_nodes in [['in_data'], ['in_map']]:
-                                        in_data = np.random.rand(num_batch, num_channel_data, input_height, input_width)
-                                        in_map = \
-                                            np.random.rand(num_batch, 1, input_height, input_width)\
-                                            * 0.8 + 0.1
+def test_positional_pooling_backward(ctx):
+    # num_batch * channel * height * width input
+    # i.e. (2, 2, 6, 6)
+    in_data = \
+        mx.nd.array(
+            [
+                [[[1, 2, -1, 0, 1, 1],
+                  [3, 6, -5, 4, 2, -2],
+                  [9, 6, -1, 3, 1, 3],
+                  [4, 2, 5, 7, 3, 1],
+                  [0, 1, 1, 2, 2, 1],
+                  [3, 1, 2, 4, 3, 3]],
 
-                                        in_data_var = mx.symbol.Variable(name="in_data")
-                                        in_map_var = mx.symbol.Variable(name="in_map")
-                                        op = mx.sym.contrib.PositionalPooling(name='test_op', data=in_data_var,
-                                                                              map=in_map_var, pool_type=pool_type,
-                                                                              pooling_convention=pooling_convention,
-                                                                              pad=(pad_h, pad_w),
-                                                                              kernel=(kernel_h, kernel_w),
-                                                                              stride=(stride_h, stride_w),
-                                                                              )
-                                        rtol, atol = 1e-5, 1e-8
-                                        # By now we only have gpu implementation
-                                        if mx.Context.default_ctx.device_type == 'gpu':
-                                            check_numeric_gradient(op, [in_data, in_map], rtol=rtol, atol=atol,
-                                                                   grad_nodes=grad_nodes, ctx=mx.gpu(0))
+                 [[3, 1, 2, 4, 3, 3],
+                  [0, 1, 1, 2, 2, 1],
+                  [4, 2, 5, 7, 3, 1],
+                  [9, 6, -1, 3, 1, 3],
+                  [3, 6, -5, 4, 2, -2],
+                  [1, 2, -1, 0, 1, 1]]],
+                [[[1, 2, 3, 4, 5, 6],
+                  [6, 5, 4, 3, 2, 1],
+                  [0, 0, 1, 1, 2, 2],
+                  [3, 3, 0, -1, -1, -2],
+                  [3, 1, 0, 3, 3, 2],
+                  [5, 6, 7, -1, -2, 0]],
+
+                 [[5, 6, 7, -1, -2, 0],
+                  [3, 1, 0, 3, 3, 2],
+                  [3, 3, 0, -1, -1, -2],
+                  [0, 0, 1, 1, 2, 2],
+                  [6, 5, 4, 3, 2, 1],
+                  [1, 2, 3, 4, 5, 6]]]
+            ], ctx=ctx)
+
+    in_map = \
+        mx.nd.array(
+            [
+                [[[0.9, 0.8, 0.7, 0.5, 0.4, 0.3],
+                  [0.7, 1.0, 0.9, 0.3, 0.2, 0.1],
+                  [0.1, 0.2, 0.3, 0.3, 0.5, 0.6],
+                  [0.6, 0.5, 0.4, 0.3, 0.2, 0.1],
+                  [0.1, 0.2, 0.2, 0.4, 0.3, 0.4],
+                  [0.4, 0.3, 0.3, 0.2, 0.2, 0.1]]],
+
+                [[[0.4, 0.3, 0.3, 0.2, 0.2, 0.1],
+                  [0.1, 0.2, 0.2, 0.2, 0.3, 0.4],
+                  [0.6, 0.5, 0.4, 0.3, 0.2, 0.1],
+                  [0.1, 0.2, 0.3, 0.1, 0.5, 0.6],
+                  [0.7, 1.0, 0.9, 0.3, 0.2, 0.1],
+                  [0.9, 0.8, 0.7, 0.5, 0.4, 0.3]]]
+            ], ctx=ctx)
+
+    in_data_var = mx.symbol.Variable(name="in_data")
+    in_map_var = mx.symbol.Variable(name="in_map")
+    for pool_type in ['normal', 'prod']:
+        op = mx.symbol.contrib.PositionalPooling(name='test_positional_pooling',
+                                                 data=in_data_var,
+                                                 map=in_map_var,
+                                                 pool_type=pool_type,
+                                                 pooling_convention="valid",
+                                                 kernel=(2, 2), stride=(2, 2), pad=(0, 0)
+                                                 )
+    rtol, atol = 1e-3, 1e-3
+    # By now we only have gpu implementation
+    check_numeric_gradient(op, [in_data, in_map], rtol=rtol, atol=atol,
+                           grad_nodes=['in_data', 'in_map'], ctx=ctx)
 
 if __name__ == '__main__':
     test_positional_pooling_forward(mx.gpu(0))
-    test_positional_pooling_backward()
+    test_positional_pooling_backward(mx.gpu(0))
     print("positional pooling backward works correctly.")
