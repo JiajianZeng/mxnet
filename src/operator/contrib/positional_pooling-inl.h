@@ -131,6 +131,9 @@ class PositionalPoolingOp : public Operator {
     CHECK_EQ(in_map_grad.CheckContiguous(), true);
     CHECK_EQ(data.CheckContiguous(), true);
     CHECK_EQ(map.CheckContiguous(), true);
+
+    Assign(in_data_grad, kWriteTo, 0);
+    Assign(in_map_grad, kWriteTo, 0);
     PositionalPoolBackward(s, in_data_grad, out_data_grad, in_map_grad, data, map,
                            param_.kernel, param_.pad, param_.stride, param_.pool_type);
   }
