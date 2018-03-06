@@ -17,11 +17,7 @@
 
 # pylint: skip-file
 from __future__ import print_function
-import numpy as np
-import mxnet as mx
 from mxnet.test_utils import *
-import unittest
-import itertools
 
 
 def test_positional_pooling_forward(ctx):
