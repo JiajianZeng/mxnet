@@ -152,22 +152,10 @@ class PositionalConvolutionOp : public Operator {
       Shape3(group_, K, N), s);
     Tensor<xpu, 4, DType> output_4d = out_data[conv::kOut].get_with_shape<xpu, 4, DType>(
       Shape4(num_, group_, M, N), s);
-    // initializations for using Split(...), broadcast_keepdim(...),
-    // as well as Concatenate(...)
     Tensor<xpu, 4, DType> scale_4d = in_data[conv::kScale].get_with_shape<xpu, 4, DType>(
-      Shape4(num_, group_, L, N));
+      Shape4(num_, group_, L, N), s);
+    // for duplicating scale 2d
     DType* scale_buffer_dptr = workspace.dptr_ + col_buffer_size_;
-    std::vector<Tensor<xpu, 2, DType> > scale_2d_split(L);
-    for (index_t i = 0; i < L; ++i) {
-      scale_2d_split.at(i) = Tensor<xpu, 2, DType>(scale_buffer_dptr + i * S * N,
-        Shape2(1, N), s);
-    }
-    std::vector<Tensor<xpu, 2, DType> > scale_2d_concat(L);
-    for (index_t i = 0; i < L; ++i) {
-      scale_2d_concat.at(i) = Tensor<xpu, 2, DType>(scale_buffer_dptr + i * S * N,
-        Shape2(S, N), s);
-    }
-    std::vector<OpReqType> req_split(L, kWriteTo);
     Tensor<xpu, 2, DType> scale_2d_expanded = Tensor<xpu, 2, DType>(scale_buffer_dptr,
       Shape2(K, N), s);
 
@@ -180,11 +168,7 @@ class PositionalConvolutionOp : public Operator {
       Tensor<xpu, 3, DType> scale_3d = scale_4d[n];
 
       for (index_t g = 0; g < group_; ++g) {
-        Split(scale_3d[g], &scale_2d_split, 0, req_split);
-        for (index_t i = 0; i < scale_2d_split.size(); ++i) {
-          scale_2d_concat.at(i) = broadcast_keepdim(scale_2d_split.at(i), 0, S);
-        }
-        Concatenate(scale_2d_concat, &scale_2d_expanded, 0, kWriteTo);
+        DuplicateRow(s, scale_2d_expanded, scale_3d[g], S);
         scale_2d_expanded = col_buffer_3d[g] * scale_2d_expanded;
         // Legacy approach shown here for comparison:
         //   Assign(output_3d[g], req[conv::kOut], dot(weight_3d[g], scale_2d_expanded));
@@ -256,42 +240,19 @@ class PositionalConvolutionOp : public Operator {
     // For computing dLoss/d(in_data[kScale])
     Tensor<xpu, 4, DType> dscale_4d = in_grad[conv::kScale].get_with_shape<xpu, 4, DType>(
       Shape4(num_, group_, L, N), s);
-
-    // initializations for using Split(...), broadcast_keepdim(...),
-    // as well as Concatenate(...)
     Tensor<xpu, 4, DType> scale_4d = in_data[conv::kScale].get_with_shape<xpu, 4, DType>(
-      Shape4(num_, group_, L, N));
+      Shape4(num_, group_, L, N), s);
+    // for duplicating scale 2d and summing over rows
     DType* scale_buffer_dptr = workspace.dptr_ + col_buffer_size_;
-    std::vector<Tensor<xpu, 2, DType> > scale_2d_split(L);
-    for (index_t i = 0; i < L; ++i) {
-      scale_2d_split.at(i) = Tensor<xpu, 2, DType>(scale_buffer_dptr + i * S * N,
-        Shape2(1, N), s);
-    }
-    std::vector<Tensor<xpu, 2, DType> > scale_2d_concat(L);
-    for (index_t i = 0; i < L; ++i) {
-      scale_2d_concat.at(i) = Tensor<xpu, 2, DType>(scale_buffer_dptr + i * S * N,
-        Shape2(S, N), s);
-    }
-    std::vector<OpReqType> req_split(L, kWriteTo);
     Tensor<xpu, 2, DType> scale_2d_expanded = Tensor<xpu, 2, DType>(scale_buffer_dptr,
       Shape2(M, N), s);
-
-    // For computing matrix sum over rows, there may be a builtin function
-    // however, I can not find it (if found, the solution can be replaced)
-    Tensor<xpu, 2, DType> ones_2d = Tensor<xpu, 2, DType>(
-      scale_buffer_dptr + scale_buffer_size_, Shape2(1, S), s);
-    ones_2d = DType(1);
 
     for (index_t n = 0; n < num_; ++n) {
       Tensor<xpu, 3, DType> out_grad_3d = out_grad_4d[n];
       Tensor<xpu, 3, DType> scale_3d = scale_4d[n];
       // gradient w.r.t input data
       for (index_t g = 0; g < group_; ++g) {
-        Split(scale_3d[g], &scale_2d_split, 0, req_split);
-        for (index_t i = 0; i < scale_2d_split.size(); ++i) {
-          scale_2d_concat.at(i) = broadcast_keepdim(scale_2d_split.at(i), 0, S);
-        }
-        Concatenate(scale_2d_concat, &scale_2d_expanded, 0, kWriteTo);
+        DuplicateRow(s, scale_2d_expanded, scale_3d[g], S);
         // Legacy approach shown here for comparison:
         //   col_buffer_3d[g] = dot(weight_3d[g].T(), out_grad_3d[g]);
         linalg_gemm(weight_3d[g], out_grad_3d[g], col_buffer_3d[g], true, false, s);
@@ -307,11 +268,7 @@ class PositionalConvolutionOp : public Operator {
              col_buffer.dptr<DType>());
       for (index_t g = 0; g < group_; ++g) {
         auto request = (n == 0) ? req[conv::kWeight] : kAddTo;
-        Split(scale_3d[g], &scale_2d_split, 0, req_split);
-        for (index_t i = 0; i < scale_2d_split.size(); ++i) {
-          scale_2d_concat.at(i) = broadcast_keepdim(scale_2d_split.at(i), 0, S);
-        }
-        Concatenate(scale_2d_concat, &scale_2d_expanded, 0, kWriteTo);
+        DuplicateRow(s, scale_2d_expanded, scale_3d[g], S);
         scale_2d_expanded = scale_2d_expanded * col_buffer_3d[g];
         // Legacy approach shown here for comparison:
         //   Assign(dweight_3d[g], request, dot(out_grad_3d[g], scale_2d_expanded.T()));
@@ -326,12 +283,7 @@ class PositionalConvolutionOp : public Operator {
         //   scale_2d_expanded = dot(weight_3d[g].T(), out_grad_3d[g]);
         linalg_gemm(weight_3d[g], out_grad_3d[g], scale_2d_expanded, true, false, s);
         scale_2d_expanded = scale_2d_expanded * col_buffer_3d[g];
-        Split(scale_2d_expanded, &scale_2d_concat, 0, req_split);
-        for (index_t i = 0; i < scale_2d_concat.size(); ++i) {
-          // The matrix's summing over rows solution here may be replaced by a builtin function
-          linalg_gemm(ones_2d, scale_2d_concat.at(i), scale_2d_split.at(i), false, false, s);
-        }
-        Concatenate(scale_2d_split, &dscale_2d, 0, kWriteTo);
+        SumOverRows(s, dscale_2d, scale_2d_expanded, S);
       }
     }
 

@@ -25,7 +25,32 @@
  * \author Jiajian Zeng
  */
 
+#include <mshadow/base.h>
+#include <mshadow/tensor.h>
+#include <mshadow/packet-inl.h>
+#include <mshadow/dot_engine-inl.h>
+#include <cassert>
 #include "./positional_convolution-inl.h"
+
+namespace mshadow {
+template<typename DType>
+inline void DuplicateRow(Stream<cpu>* s,
+                         const Tensor<cpu, 2, DType>& out,
+                         const Tensor<cpu, 2, DType>& in,
+                         const int dfactor) {
+  // NOT_IMPLEMENTED
+  return;
+}
+
+template<typename DType>
+inline void SumOverRows(Stream<cpu>* s,
+                        const Tensor<cpu, 2, DType>& out,
+                        const Tensor<cpu, 2, DType>& in,
+                        const int sfactor) {
+  // NOT_IMPLEMENTED
+  return;
+}
+}  // namespace mshadow
 
 namespace mxnet {
 namespace op {
